@@ -4,6 +4,7 @@ import re
 from collections import defaultdict
 from PIL import Image
 import random
+import numpy as np
 
 from .mono_dataset import MonoDataset
 from torchvision import transforms
@@ -25,6 +26,28 @@ class CustomOrderedDataset(MonoDataset):
         strict_neighbors=False（默认）：边界处邻帧用“就近夹取”（clamp），即用边界帧自己代替。
         """
         super(CustomOrderedDataset, self).__init__(*args, **kwargs)
+        W0, H0 = 1920, 1080
+        fx_px = 1.8667907472758156e3
+        fy_px = 4.8466023709626388e3
+        cx_px = 1.1048582537290060e3
+        cy_px = 2.9847951587590666e2
+
+        # 训练输入尺寸 = options.width/height
+        W, H = self.width, self.height
+
+    # 把标定内参缩放到训练分辨率
+        sx, sy = W / W0, H / H0
+        fx_r, fy_r = fx_px * sx, fy_px * sy
+        cx_r, cy_r = cx_px * sx, cy_px * sy
+
+        # 按 Monodepth2 约定写成“归一化内参”（相对于训练分辨率）
+        self.K = np.array([
+            [fx_r / W, 0.0,        cx_r / W,  0.0],
+            [0.0,      fy_r / H,   cy_r / H,  0.0],
+            [0.0,      0.0,        1.0,       0.0],
+            [0.0,      0.0,        0.0,       1.0],
+        ], dtype=np.float32)
+
         self.strict_neighbors = strict_neighbors
 
         # 读取 self.filenames（父类已读 txt 得到列表：每行一条相对路径）

@@ -6,6 +6,7 @@ from PIL import Image
 import random
 
 from .mono_dataset import MonoDataset
+from torchvision import transforms
 
 class CustomOrderedDataset(MonoDataset):
     """
@@ -93,7 +94,7 @@ class CustomOrderedDataset(MonoDataset):
 
         # 数据增强标志（沿用父类逻辑）
         do_color_aug = self.is_train and random.random() > 0.5
-        do_flip = self.is_train and self.get_random_flip()
+        do_flip = self.is_train and random.random() > 0.5
 
         # 为每个需要的相对帧 i in frame_ids 准备图像
         seq_len = len(self.videos[vid])

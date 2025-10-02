@@ -122,16 +122,20 @@ class CustomOrderedDataset(MonoDataset):
                 self.brightness, self.contrast, self.saturation, self.hue
             )
                 # 兼容不同版本：有的返回函数，有的返回(b, c, s, h)
-            if isinstance(params, tuple):
-                b, c, s, h = params
+            if callable(params):
+                # 某些 torchvision 版本直接返回可调用的变换
+                color_aug = params
+            else:
+                # 其他版本返回 (b, c, s, h, ...) 这样的序列 —— 只取前四个
+                seq = list(params)
+                b, c, s, h = seq[:4]
                 def color_aug(img):
                     img = F.adjust_brightness(img, b)
                     img = F.adjust_contrast(img, c)
                     img = F.adjust_saturation(img, s)
                     img = F.adjust_hue(img, h)
                     return img
-            else:
-                color_aug = params  # 已经是可调用
+            
         else:
             color_aug = (lambda x: x)
 

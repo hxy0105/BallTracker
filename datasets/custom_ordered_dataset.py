@@ -3,6 +3,7 @@ import os
 import re
 from collections import defaultdict
 from PIL import Image
+import random
 
 from .mono_dataset import MonoDataset
 
@@ -91,7 +92,7 @@ class CustomOrderedDataset(MonoDataset):
         vid, pos = self.samples[index]
 
         # 数据增强标志（沿用父类逻辑）
-        do_color_aug = self.is_train and self.get_color_aug()
+        do_color_aug = self.is_train and random.random() > 0.5
         do_flip = self.is_train and self.get_random_flip()
 
         # 为每个需要的相对帧 i in frame_ids 准备图像
@@ -113,7 +114,15 @@ class CustomOrderedDataset(MonoDataset):
             inputs[("color", i, -1)] = color
 
         # 预处理（金字塔、多尺度、张量化、颜色增强）
-        self.preprocess(inputs, do_color_aug, do_flip)
+        if do_color_aug:
+            color_aug = transforms.ColorJitter.get_params(
+            self.brightness, self.contrast, self.saturation, self.hue
+            )
+        else:
+            color_aug = (lambda x: x)
+
+        self.preprocess(inputs, color_aug)
+        #self.preprocess(inputs, do_color_aug, do_flip)
 
         # 相机内参：沿用父类的约定
         for i in self.frame_ids:

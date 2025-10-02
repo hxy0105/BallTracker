@@ -2,7 +2,7 @@ from .mono_dataset import MonoDataset
 from PIL import Image
 import os
 
-class CustomSeqDataset(MonoDataset):
+class CustomDataset(MonoDataset):
     def __init__(self, *args, **kwargs):
         super(CustomSeqDataset, self).__init__(*args, **kwargs)
         # 这里假设 split 文件已经是顺序排列的

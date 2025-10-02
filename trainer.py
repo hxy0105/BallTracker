@@ -25,7 +25,7 @@ import datasets
 import networks
 from IPython import embed
 
-from datasets.custom_dataset import CustomDataset
+#from datasets.custom_dataset import CustomDataset
 from datasets.custom_ordered_dataset import CustomOrderedDataset
 
 class Trainer:

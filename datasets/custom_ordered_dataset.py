@@ -98,7 +98,7 @@ class CustomOrderedDataset(MonoDataset):
 
         # 为每个需要的相对帧 i in frame_ids 准备图像
         seq_len = len(self.videos[vid])
-        for i in self.frame_ids:
+        for i in self.frame_idxs:
             if self.strict_neighbors:
                 # 严格模式下样本已保证不越界
                 p = pos + i

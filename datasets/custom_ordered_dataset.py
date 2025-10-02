@@ -118,8 +118,8 @@ class CustomOrderedDataset(MonoDataset):
 
         # 预处理（金字塔、多尺度、张量化、颜色增强）
         if do_color_aug:
-            color_aug = transforms.ColorJitter.get_params(
-            self.brightness, self.contrast, self.saturation, self.hue
+            params = transforms.ColorJitter.get_params(
+                self.brightness, self.contrast, self.saturation, self.hue
             )
                 # 兼容不同版本：有的返回函数，有的返回(b, c, s, h)
             if isinstance(params, tuple):

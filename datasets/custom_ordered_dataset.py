@@ -126,7 +126,7 @@ class CustomOrderedDataset(MonoDataset):
         #self.preprocess(inputs, do_color_aug, do_flip)
 
         # 相机内参：沿用父类的约定
-        for i in self.frame_ids:
+        for i in self.frame_idxs:
             inputs[("color_aug", i, 0)] = inputs[("color", i, 0)]
 
         # 其他必须字段（保持兼容）

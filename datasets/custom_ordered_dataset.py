@@ -95,7 +95,8 @@ class CustomOrderedDataset(MonoDataset):
         vid, pos = self.samples[index]
 
         # 数据增强标志（沿用父类逻辑）
-        do_color_aug = self.is_train and random.random() > 0.5
+        #do_color_aug = self.is_train and random.random() > 0.5
+        do_color_aug = False
         do_flip = self.is_train and random.random() > 0.5
 
         # 为每个需要的相对帧 i in frame_ids 准备图像
@@ -117,6 +118,12 @@ class CustomOrderedDataset(MonoDataset):
             inputs[("color", i, -1)] = color
 
         # 预处理（金字塔、多尺度、张量化、颜色增强）
+        # def _range(val, base=1.0, is_hue=False):
+        #     # 把 0.2 / (0.8,1.2) 统一成区间
+        #     if isinstance(val, (tuple, list)) and len(val) == 2:
+        #         return float(val[0]), float(val[1])
+        #     return (-float(val), float(val)) if is_hue else (max(0.0, base - float(val)), base + float(val))
+        
         if do_color_aug:
             params = transforms.ColorJitter.get_params(
                 self.brightness, self.contrast, self.saturation, self.hue

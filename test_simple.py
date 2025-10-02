@@ -1,6 +1,5 @@
 # Copyright Niantic 2019. Patent Pending. All rights reserved.
-#
-# Licensed under the Monodepth2 licence (for non-commercial use only)
+# Licensed under the Monodepth2 licence (non-commercial use only)
 
 from __future__ import absolute_import, division, print_function
 
@@ -26,161 +25,189 @@ def parse_args():
         description='Simple testing function for Monodepth2 models.')
 
     parser.add_argument('--image_path', type=str, required=True,
-                        help='path to a test image or folder of images')
+                        help='path to a test image OR a folder of images')
 
+    # 方式一：官方预训练（只给 model_name）
     parser.add_argument('--model_name', type=str, default=None,
-                        help='name of a pretrained model to use '
-                             '(ignore if using --load_weights_folder)',
-                        choices=[
-                            "mono_640x192",
-                            "stereo_640x192",
-                            "mono+stereo_640x192",
-                            "mono_no_pt_640x192",
-                            "stereo_no_pt_640x192",
-                            "mono+stereo_no_pt_640x192",
-                            "mono_1024x320",
-                            "stereo_1024x320",
-                            "mono+stereo_1024x320"
-                        ])
+                        help='pretrained model name (if set, will download/use Niantic weights). '
+                             'Ignored when --load_weights_folder is provided.')
 
+    # 方式二：自训练权重（优先级更高）
     parser.add_argument('--load_weights_folder', type=str, default=None,
-                        help='path to a folder of model weights (e.g. models/weights_19)')
+                        help='path to your trained weights folder, e.g. /path/to/weights_19')
 
     parser.add_argument('--num_layers', type=int, default=18,
-                        help='resnet layers (must match training, e.g. 18 or 50)')
+                        help='resnet layers for your custom model (18 or 50)')
 
-    parser.add_argument('--ext', type=str, default="jpg",
-                        help='image extension to search for in folder')
+    parser.add_argument('--ext', type=str, default=None,
+                        help='image extension to search for when image_path is a folder '
+                             '(default: scan jpg/jpeg/png)')
 
-    parser.add_argument("--no_cuda", action='store_true',
+    parser.add_argument('--output_dir', type=str, default=None,
+                        help='where to save outputs (default: alongside inputs)')
+
+    parser.add_argument('--no_cuda', action='store_true',
                         help='if set, disables CUDA')
 
-    parser.add_argument("--pred_metric_depth", action='store_true',
-                        help='if set, predicts metric depth instead of disparity. '
+    parser.add_argument('--pred_metric_depth', action='store_true',
+                        help='predict metric depth instead of disparity '
                              '(only makes sense for stereo-trained models)')
 
     return parser.parse_args()
 
 
+def load_custom_model(device, weights_folder, num_layers):
+    """Load a model from a custom weights folder (encoder.pth + depth.pth)."""
+    print("-> Loading model from custom folder:", weights_folder)
+    enc_path = os.path.join(weights_folder, "encoder.pth")
+    dec_path = os.path.join(weights_folder, "depth.pth")
+
+    if not (os.path.isfile(enc_path) and os.path.isfile(dec_path)):
+        raise FileNotFoundError(
+            f"encoder/depth weights not found under: {weights_folder}")
+
+    enc_state = torch.load(enc_path, map_location=device)
+
+    # image size used in training (saved by trainer for encoder)
+    feed_height = int(enc_state.get('height', 192))
+    feed_width = int(enc_state.get('width', 640))
+
+    encoder = networks.ResnetEncoder(num_layers, False)
+    # filter keys (state dict may include meta like height/width)
+    enc_state_filtered = {k: v for k, v in enc_state.items()
+                          if k in encoder.state_dict()}
+    encoder.load_state_dict({**encoder.state_dict(), **enc_state_filtered})
+    encoder.to(device).eval()
+
+    depth_decoder = networks.DepthDecoder(num_ch_enc=encoder.num_ch_enc, scales=range(4))
+    depth_decoder.load_state_dict(torch.load(dec_path, map_location=device))
+    depth_decoder.to(device).eval()
+
+    return encoder, depth_decoder, feed_height, feed_width
+
+
+def load_pretrained_model(device, model_name):
+    """Load one of Niantic's pretrained models by name."""
+    assert model_name is not None, "model_name must be provided for pretrained mode"
+    download_model_if_doesnt_exist(model_name)
+    model_path = os.path.join("models", model_name)
+    print("-> Loading pretrained model:", model_path)
+
+    enc_path = os.path.join(model_path, "encoder.pth")
+    dec_path = os.path.join(model_path, "depth.pth")
+
+    encoder = networks.ResnetEncoder(18, False)
+    enc_state = torch.load(enc_path, map_location=device)
+    feed_height = int(enc_state['height'])
+    feed_width = int(enc_state['width'])
+
+    enc_state_filtered = {k: v for k, v in enc_state.items()
+                          if k in encoder.state_dict()}
+    encoder.load_state_dict(enc_state_filtered)
+    encoder.to(device).eval()
+
+    depth_decoder = networks.DepthDecoder(num_ch_enc=encoder.num_ch_enc, scales=range(4))
+    depth_decoder.load_state_dict(torch.load(dec_path, map_location=device))
+    depth_decoder.to(device).eval()
+
+    return encoder, depth_decoder, feed_height, feed_width
+
+
+def collect_image_paths(image_path, ext):
+    """Return a list of image file paths and an output directory."""
+    if os.path.isfile(image_path):
+        return [image_path], os.path.dirname(image_path)
+
+    if os.path.isdir(image_path):
+        if ext is None:
+            exts = ("*.jpg", "*.jpeg", "*.png", "*.JPG", "*.JPEG", "*.PNG")
+            paths = []
+            for e in exts:
+                paths += glob.glob(os.path.join(image_path, e))
+        else:
+            paths = glob.glob(os.path.join(image_path, f"*.{ext}"))
+        paths = sorted(paths)
+        return paths, image_path
+
+    raise FileNotFoundError(f"image_path not found: {image_path}")
+
+
+def save_outputs(disp, disp_resized, output_directory, output_name, pred_metric_depth):
+    scaled_disp, depth = disp_to_depth(disp, 0.1, 100)
+
+    if pred_metric_depth:
+        npy_path = os.path.join(output_directory, f"{output_name}_depth.npy")
+        metric_depth = STEREO_SCALE_FACTOR * depth.cpu().numpy()
+        np.save(npy_path, metric_depth)
+    else:
+        npy_path = os.path.join(output_directory, f"{output_name}_disp.npy")
+        np.save(npy_path, scaled_disp.cpu().numpy())
+
+    # color map preview
+    disp_resized_np = disp_resized.squeeze().cpu().numpy()
+    vmax = np.percentile(disp_resized_np, 95)
+    normalizer = mpl.colors.Normalize(vmin=disp_resized_np.min(), vmax=vmax)
+    mapper = cm.ScalarMappable(norm=normalizer, cmap='magma')
+    colormapped_im = (mapper.to_rgba(disp_resized_np)[:, :, :3] * 255).astype(np.uint8)
+    im = pil.fromarray(colormapped_im)
+    jpg_path = os.path.join(output_directory, f"{output_name}_disp.jpeg")
+    im.save(jpg_path)
+
+    return jpg_path, npy_path
+
+
 def test_simple(args):
-    """Function to predict for a single image or folder of images
-    """
-    if torch.cuda.is_available() and not args.no_cuda:
-        device = torch.device("cuda")
-    else:
-        device = torch.device("cpu")
+    # device
+    device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
 
-    # ==== 加载模型 ====
+    # load model
     if args.load_weights_folder is not None:
-        # ---- 自己训练的模型 ----
-        print("-> Loading model from custom folder ", args.load_weights_folder)
-        encoder_path = os.path.join(args.load_weights_folder, "encoder.pth")
-        depth_decoder_path = os.path.join(args.load_weights_folder, "depth.pth")
-
-        # 读取 encoder
-        loaded_dict_enc = torch.load(encoder_path, map_location=device)
-        feed_height = loaded_dict_enc['height']
-        feed_width = loaded_dict_enc['width']
-        encoder = networks.ResnetEncoder(args.num_layers, False)
-
-        filtered_dict_enc = {k: v for k, v in loaded_dict_enc.items() if k in encoder.state_dict()}
-        encoder.load_state_dict(filtered_dict_enc)
-        encoder.to(device)
-        encoder.eval()
-
-        # decoder
-        depth_decoder = networks.DepthDecoder(num_ch_enc=encoder.num_ch_enc, scales=range(4))
-        loaded_dict = torch.load(depth_decoder_path, map_location=device)
-        depth_decoder.load_state_dict(loaded_dict)
-        depth_decoder.to(device)
-        depth_decoder.eval()
-
+        encoder, depth_decoder, feed_h, feed_w = load_custom_model(
+            device, args.load_weights_folder, args.num_layers)
     else:
-        # ---- 官方预训练模型 ----
-        assert args.model_name is not None, "Need either --model_name or --load_weights_folder"
-        download_model_if_doesnt_exist(args.model_name)
-        model_path = os.path.join("models", args.model_name)
-        print("-> Loading model from ", model_path)
-        encoder_path = os.path.join(model_path, "encoder.pth")
-        depth_decoder_path = os.path.join(model_path, "depth.pth")
+        encoder, depth_decoder, feed_h, feed_w = load_pretrained_model(
+            device, args.model_name)
 
-        encoder = networks.ResnetEncoder(18, False)
-        loaded_dict_enc = torch.load(encoder_path, map_location=device)
-        feed_height = loaded_dict_enc['height']
-        feed_width = loaded_dict_enc['width']
-        filtered_dict_enc = {k: v for k, v in loaded_dict_enc.items() if k in encoder.state_dict()}
-        encoder.load_state_dict(filtered_dict_enc)
-        encoder.to(device)
-        encoder.eval()
+    # gather inputs
+    paths, default_out_dir = collect_image_paths(args.image_path, args.ext)
+    out_dir = args.output_dir or default_out_dir
+    os.makedirs(out_dir, exist_ok=True)
+    print(f"-> Predicting on {len(paths)} images")
+    print(f"-> Outputs will be saved to: {out_dir}")
 
-        depth_decoder = networks.DepthDecoder(num_ch_enc=encoder.num_ch_enc, scales=range(4))
-        loaded_dict = torch.load(depth_decoder_path, map_location=device)
-        depth_decoder.load_state_dict(loaded_dict)
-        depth_decoder.to(device)
-        depth_decoder.eval()
+    to_tensor = transforms.ToTensor()
 
-    # ==== 找到要预测的图像 ====
-    if os.path.isfile(args.image_path):
-        paths = [args.image_path]
-        output_directory = os.path.dirname(args.image_path)
-    elif os.path.isdir(args.image_path):
-        paths = glob.glob(os.path.join(args.image_path, '*.{}'.format(args.ext)))
-        output_directory = args.image_path
-    else:
-        raise Exception("Can not find args.image_path: {}".format(args.image_path))
-
-    print("-> Predicting on {:d} test images".format(len(paths)))
-
-    # ==== 预测并保存结果 ====
     with torch.no_grad():
-        for idx, image_path in enumerate(paths):
-
-            if image_path.endswith("_disp.jpg") or image_path.endswith("_disp.jpeg"):
+        for i, img_path in enumerate(paths):
+            if img_path.endswith("_disp.jpg") or img_path.endswith("_disp.jpeg"):
                 continue
 
-            input_image = pil.open(image_path).convert('RGB')
-            original_width, original_height = input_image.size
-            input_image = input_image.resize((feed_width, feed_height), pil.LANCZOS)
-            input_image = transforms.ToTensor()(input_image).unsqueeze(0).to(device)
+            # load & resize
+            img = pil.open(img_path).convert('RGB')
+            orig_w, orig_h = img.size
+            img_resized = img.resize((feed_w, feed_h), pil.LANCZOS)
+            inp = to_tensor(img_resized).unsqueeze(0).to(device)
 
-            features = encoder(input_image)
-            outputs = depth_decoder(features)
-
+            # forward
+            feats = encoder(inp)
+            outputs = depth_decoder(feats)
             disp = outputs[("disp", 0)]
+
+            # resize back to original for visualization
             disp_resized = torch.nn.functional.interpolate(
-                disp, (original_height, original_width), mode="bilinear", align_corners=False)
+                disp, (orig_h, orig_w), mode="bilinear", align_corners=False)
 
-            # 保存 numpy 文件
-            output_name = os.path.splitext(os.path.basename(image_path))[0]
-            scaled_disp, depth = disp_to_depth(disp, 0.1, 100)
+            stem = os.path.splitext(os.path.basename(img_path))[0]
+            jpg_path, npy_path = save_outputs(
+                disp, disp_resized, out_dir, stem, args.pred_metric_depth)
 
-            if args.pred_metric_depth:
-                name_dest_npy = os.path.join(output_directory, "{}_depth.npy".format(output_name))
-                metric_depth = STEREO_SCALE_FACTOR * depth.cpu().numpy()
-                np.save(name_dest_npy, metric_depth)
-            else:
-                name_dest_npy = os.path.join(output_directory, "{}_disp.npy".format(output_name))
-                np.save(name_dest_npy, scaled_disp.cpu().numpy())
+            print(f"   [{i+1}/{len(paths)}] saved:")
+            print(f"     - {jpg_path}")
+            print(f"     - {npy_path}")
 
-            # 保存彩色深度图
-            disp_resized_np = disp_resized.squeeze().cpu().numpy()
-            vmax = np.percentile(disp_resized_np, 95)
-            normalizer = mpl.colors.Normalize(vmin=disp_resized_np.min(), vmax=vmax)
-            mapper = cm.ScalarMappable(norm=normalizer, cmap='magma')
-            colormapped_im = (mapper.to_rgba(disp_resized_np)[:, :, :3] * 255).astype(np.uint8)
-            im = pil.fromarray(colormapped_im)
-
-            name_dest_im = os.path.join(output_directory, "{}_disp.jpeg".format(output_name))
-            im.save(name_dest_im)
-
-            print("   Processed {:d} of {:d} images - saved predictions to:".format(
-                idx + 1, len(paths)))
-            print("   - {}".format(name_dest_im))
-            print("   - {}".format(name_dest_npy))
-
-    print('-> Done!')
+    print("-> Done!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     args = parse_args()
     test_simple(args)

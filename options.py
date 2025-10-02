@@ -20,7 +20,7 @@ class MonodepthOptions:
         self.parser.add_argument("--data_path",
                                  type=str,
                                  help="path to the training data",
-                                 default=os.path.join(file_dir, "E:\balltracker\ball_tracker\images"))
+                                 default=os.path.join(file_dir, r"E:\balltracker\ball_tracker\images"))
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",

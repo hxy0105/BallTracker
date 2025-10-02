@@ -325,8 +325,15 @@ class Trainer:
         """Validate the model on a single minibatch
         """
         self.set_eval()
+
+        # 先创建/重置一次验证集迭代器
+        if not hasattr(self, "val_iter") or self.val_iter is None:
+            self.val_iter = iter(self.val_loader)
+
         try:
-            inputs = self.val_iter.next()
+            inputs = next(self.val_iter)
+
+            #inputs = self.val_iter.next()
         except StopIteration:
             self.val_iter = iter(self.val_loader)
             inputs = self.val_iter.next()

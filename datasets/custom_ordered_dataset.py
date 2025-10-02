@@ -5,6 +5,7 @@ from collections import defaultdict
 from PIL import Image
 import random
 import numpy as np
+import torch
 
 from .mono_dataset import MonoDataset
 from torchvision import transforms
@@ -169,6 +170,14 @@ class CustomOrderedDataset(MonoDataset):
         else:
             color_aug = (lambda x: x)
 
+        for s in range(self.num_scales):
+            K = self.K.copy()
+            K[0, :] *= self.width  // (2 ** s)
+            K[1, :] *= self.height // (2 ** s)
+            inv_K = np.linalg.pinv(K)
+
+            inputs[("K", s)]     = torch.from_numpy(K.astype(np.float32))
+            inputs[("inv_K", s)] = torch.from_numpy(inv_K.astype(np.float32))
         self.preprocess(inputs, color_aug)
         #self.preprocess(inputs, do_color_aug, do_flip)
 
